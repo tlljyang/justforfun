@@ -1,7 +1,7 @@
 import { connect } from 'cloudflare:sockets';
 import sha256 from 'js-sha256';
 
-export async function TROverWSHandler(request) {
+export async function trojanOverWSHandler(request) {
     const webSocketPair = new WebSocketPair();
     const [client, webSocket] = Object.values(webSocketPair);
     webSocket.accept();
@@ -38,7 +38,7 @@ export async function TROverWSHandler(request) {
                         portRemote = 443,
                         addressRemote = "",
                         rawClientData,
-                    } = await parseTRHeader(chunk);
+                    } = await parseTrojanHeader(chunk);
 
                     address = addressRemote;
                     portWithRandomLog = `${portRemote}--${Math.random()} tcp`;
@@ -69,7 +69,7 @@ export async function TROverWSHandler(request) {
     });
 }
 
-async function parseTRHeader(buffer) {
+async function parseTrojanHeader(buffer) {
     if (buffer.byteLength < 56) {
         return {
             hasError: true,
@@ -86,7 +86,7 @@ async function parseTRHeader(buffer) {
     }
 
     const password = new TextDecoder().decode(buffer.slice(0, crLfIndex));
-    if (password !== sha256.sha224(globalThis.TRPassword)) {
+    if (password !== sha256.sha224(globalThis.trojanPassword)) {
         return {
             hasError: true,
             message: "invalid password",
@@ -210,14 +210,14 @@ async function handleTCPOutBound(
                 safeCloseWebSocket(webSocket);
             });
             
-        TRRemoteSocketToWS(tcpSocket, webSocket, null, log);
+        trojanRemoteSocketToWS(tcpSocket, webSocket, null, log);
     }
   
     const tcpSocket = await connectAndWrite(addressRemote, portRemote);
   
     // when remoteSocket is ready, pass to websocket
     // remote--> ws
-    TRRemoteSocketToWS(tcpSocket, webSocket, retry, log);
+    trojanRemoteSocketToWS(tcpSocket, webSocket, retry, log);
 }
 
 /**
@@ -283,7 +283,7 @@ function makeReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {
     return stream;
 }
 
-async function TRRemoteSocketToWS(remoteSocket, webSocket, retry, log) {
+async function trojanRemoteSocketToWS(remoteSocket, webSocket, retry, log) {
     let hasIncomingData = false;
     await remoteSocket.readable
         .pipeTo(
@@ -310,7 +310,7 @@ async function TRRemoteSocketToWS(remoteSocket, webSocket, retry, log) {
             })
         )
         .catch((error) => {
-            console.error(`${atob('dHJvamFu')}RemoteSocketToWS error:`, error.stack || error);
+            console.error(`trojanRemoteSocketToWS error:`, error.stack || error);
             safeCloseWebSocket(webSocket);
         });
     

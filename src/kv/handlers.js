@@ -1,12 +1,13 @@
 import { fetchWarpConfigs } from '../protocols/warp';
+import { isDomain, resolveDNS } from '../helpers/helpers';
 import { Authenticate } from '../authentication/auth';
 
 export async function getDataset(request, env) {
     let proxySettings, warpConfigs;
 
     try {
-        proxySettings = await env.kv.get("proxySettings", {type: 'json'});
-        warpConfigs = await env.kv.get('warpConfigs', {type: 'json'});
+        proxySettings = await env.bpb.get("proxySettings", {type: 'json'});
+        warpConfigs = await env.bpb.get('warpConfigs', {type: 'json'});
     } catch (error) {
         console.log(error);
         throw new Error(`An error occurred while getting KV - ${error}`);
@@ -27,25 +28,13 @@ export async function updateDataset (request, env) {
     let newSettings = request.method === 'POST' ? await request.formData() : null;
     const isReset = newSettings?.get('resetSettings') === 'true';
     let currentSettings;
-    let udpNoises = [];
     if (!isReset) {
         try {
-            currentSettings = await env.kv.get("proxySettings", {type: 'json'});
+            currentSettings = await env.bpb.get("proxySettings", {type: 'json'});
         } catch (error) {
             console.log(error);
             throw new Error(`An error occurred while getting current KV settings - ${error}`);
         }
-        const udpNoiseModes = newSettings?.getAll('udpXrayNoiseMode') || [];
-        const udpNoisePackets = newSettings?.getAll('udpXrayNoisePacket') || [];
-        const udpNoiseDelaysMin = newSettings?.getAll('udpXrayNoiseDelayMin') || [];
-        const udpNoiseDelaysMax = newSettings?.getAll('udpXrayNoiseDelayMax') || [];
-        const udpNoiseCount = newSettings?.getAll('udpXrayNoiseCount') || [];
-        udpNoises.push(...udpNoiseModes.map((mode, index) => ({
-            type: mode,
-            packet: udpNoisePackets[index],
-            delay: `${udpNoiseDelaysMin[index]}-${udpNoiseDelaysMax[index]}`,
-            count: udpNoiseCount[index]
-        })));
     } else {
         newSettings = null;
     }
@@ -58,21 +47,41 @@ export async function updateDataset (request, env) {
         return fieldValue;
     }
 
+    const remoteDNS = validateField('remoteDNS') ?? currentSettings?.remoteDNS ?? 'https://8.8.8.8/dns-query';
+    const enableIPv6 = validateField('enableIPv6') ?? currentSettings?.enableIPv6 ?? true;
+    const url = new URL(remoteDNS);
+    const remoteDNSServer = url.hostname;
+    const isServerDomain = isDomain(remoteDNSServer);
+    let resolvedRemoteDNS = {};
+    if (isServerDomain) {
+        try {
+            const resolvedDomain = await resolveDNS(remoteDNSServer);
+            resolvedRemoteDNS = {
+                server: remoteDNSServer,
+                staticIPs: enableIPv6 ? [...resolvedDomain.ipv4, ...resolvedDomain.ipv6] : resolvedDomain.ipv4
+            };
+        } catch (error) {
+            console.log(error);
+            throw new Error(`An error occurred while resolving remote DNS server, please try agian! - ${error}`);
+        }
+    } 
+
     const proxySettings = {
-        remoteDNS: validateField('remoteDNS') ?? currentSettings?.remoteDNS ?? 'https://8.8.8.8/dns-query',
+        remoteDNS: remoteDNS,
+        resolvedRemoteDNS: resolvedRemoteDNS,
         localDNS: validateField('localDNS') ?? currentSettings?.localDNS ?? '8.8.8.8',
-        VLTRFakeDNS: validateField('VLTRFakeDNS') ?? currentSettings?.VLTRFakeDNS ?? false,
+        vlessTrojanFakeDNS: validateField('vlessTrojanFakeDNS') ?? currentSettings?.vlessTrojanFakeDNS ?? false,
         proxyIP: validateField('proxyIP')?.replaceAll(' ', '') ?? currentSettings?.proxyIP ?? '',
         outProxy: validateField('outProxy') ?? currentSettings?.outProxy ?? '',
         outProxyParams: extractChainProxyParams(validateField('outProxy')) ?? currentSettings?.outProxyParams ?? {},
         cleanIPs: validateField('cleanIPs')?.replaceAll(' ', '') ?? currentSettings?.cleanIPs ?? '',
-        enableIPv6: validateField('enableIPv6') ?? currentSettings?.enableIPv6 ?? true,
+        enableIPv6: enableIPv6,
         customCdnAddrs: validateField('customCdnAddrs')?.replaceAll(' ', '') ?? currentSettings?.customCdnAddrs ?? '',
         customCdnHost: validateField('customCdnHost')?.trim() ?? currentSettings?.customCdnHost ?? '',
         customCdnSni: validateField('customCdnSni')?.trim() ?? currentSettings?.customCdnSni ?? '',
-        bestVLTRInterval: validateField('bestVLTRInterval') ?? currentSettings?.bestVLTRInterval ?? '30',
-        VLConfigs: validateField('VLConfigs') ?? currentSettings?.VLConfigs ?? true,
-        TRConfigs: validateField('TRConfigs') ?? currentSettings?.TRConfigs ?? false,
+        bestVLESSTrojanInterval: validateField('bestVLESSTrojanInterval') ?? currentSettings?.bestVLESSTrojanInterval ?? '30',
+        vlessConfigs: validateField('vlessConfigs') ?? currentSettings?.vlessConfigs ?? true,
+        trojanConfigs: validateField('trojanConfigs') ?? currentSettings?.trojanConfigs ?? false,
         ports: validateField('ports')?.split(',') ?? currentSettings?.ports ?? ['443'],
         lengthMin: validateField('fragmentLengthMin') ?? currentSettings?.lengthMin ?? '100',
         lengthMax: validateField('fragmentLengthMax') ?? currentSettings?.lengthMax ?? '200',
@@ -91,15 +100,8 @@ export async function updateDataset (request, env) {
         warpEndpoints: validateField('warpEndpoints')?.replaceAll(' ', '') ?? currentSettings?.warpEndpoints ?? 'engage.cloudflareclient.com:2408',
         warpFakeDNS: validateField('warpFakeDNS') ?? currentSettings?.warpFakeDNS ?? false,
         warpEnableIPv6: validateField('warpEnableIPv6') ?? currentSettings?.warpEnableIPv6 ?? true,
+        warpPlusLicense: validateField('warpPlusLicense') ?? currentSettings?.warpPlusLicense ?? '',
         bestWarpInterval: validateField('bestWarpInterval') ?? currentSettings?.bestWarpInterval ?? '30',
-        xrayUdpNoises: (udpNoises.length ? JSON.stringify(udpNoises) : currentSettings?.xrayUdpNoises) ?? JSON.stringify([
-            {
-                type: 'base64',
-                packet: btoa(globalThis.userID),
-                delay: '1-1',
-                count: '1'
-            }
-        ]),
         hiddifyNoiseMode: validateField('hiddifyNoiseMode') ?? currentSettings?.hiddifyNoiseMode ?? 'm4',
         nikaNGNoiseMode: validateField('nikaNGNoiseMode') ?? currentSettings?.nikaNGNoiseMode ?? 'quic',
         noiseCountMin: validateField('noiseCountMin') ?? currentSettings?.noiseCountMin ?? '10',
@@ -112,7 +114,7 @@ export async function updateDataset (request, env) {
     };
 
     try {    
-        await env.kv.put("proxySettings", JSON.stringify(proxySettings));
+        await env.bpb.put("proxySettings", JSON.stringify(proxySettings));
         if (isReset) await updateWarpConfigs(request, env);          
     } catch (error) {
         console.log(error);
@@ -127,7 +129,7 @@ function extractChainProxyParams(chainProxy) {
     if (!chainProxy) return {};
     const url = new URL(chainProxy);
     const protocol = url.protocol.slice(0, -1);
-    if (protocol === atob('dmxlc3M=')) {
+    if (protocol === 'vless') {
         const params = new URLSearchParams(url.search);
         configParams = {
             protocol: protocol,
@@ -157,7 +159,8 @@ export async function updateWarpConfigs(request, env) {
     if (!auth) return new Response('Unauthorized', { status: 401 });
     if (request.method === 'POST') {
         try {
-            const { error: warpPlusError } = await fetchWarpConfigs(env);
+            const { proxySettings } = await getDataset(request, env);
+            const { error: warpPlusError } = await fetchWarpConfigs(env, proxySettings);
             if (warpPlusError) return new Response(warpPlusError, { status: 400 });
             return new Response('Warp configs updated successfully', { status: 200 });
         } catch (error) {
